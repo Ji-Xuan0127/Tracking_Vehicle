@@ -57,10 +57,12 @@
 
 /* USER CODE BEGIN PV */
 uint16_t Tracks[4] = {0, 0, 0, 0};
+uint8_t Track_Binary[4] = {0, 0, 0, 0};
 uint16_t values[4] = {0, 0, 0, 0};
 
 #define ADC_FULL_SCALE      4095.0f
 #define MOTOR_PWM_MAX       4199
+#define TRACK_THRESHOLD     2000U
 static uint16_t values_filtered[4] = {0, 0, 0, 0};
 static uint8_t pot_filter_ready = 0;
 
@@ -106,6 +108,7 @@ int16_t Encoder_Get(TIM_HandleTypeDef *htim);
 static uint16_t ADC_Filter(uint16_t raw, uint16_t *state);
 static float Map_ADC_To_Float(uint16_t raw, float min, float max);
 static int16_t Clamp_PWM(int32_t value);
+static void Track_Binary_Process(void);
 /* USER CODE END 0 */
 
 /**
@@ -310,6 +313,14 @@ static int16_t Clamp_PWM(int32_t value)
   return (int16_t)value;
 }
 
+static void Track_Binary_Process(void)
+{
+  for (uint8_t i = 0; i < 4U; ++i)
+  {
+    Track_Binary[i] = (Tracks[i] > TRACK_THRESHOLD) ? 1U : 0U;
+  }
+}
+
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   if (htim->Instance == TIM6)
@@ -333,8 +344,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
       pot_filter_ready = 1;
     }
 
-    uint32_t track_sum = (uint32_t)Tracks[0] + Tracks[1] + Tracks[2] + Tracks[3];
-    if ((Tracks[0] >= 2000U) && (Tracks[1] >= 2000U) && (Tracks[2] >= 2000U) && (Tracks[3] >= 2000U))
+    Track_Binary_Process();
+
+    uint32_t track_sum = (uint32_t)Track_Binary[0] + Track_Binary[1] + Track_Binary[2] + Track_Binary[3];
+    if ((Track_Binary[0] == 1U) && (Track_Binary[1] == 1U) && (Track_Binary[2] == 1U) && (Track_Binary[3] == 1U))
     {
       Out = 0.0f;
       Track_error = 0.0f;
@@ -343,7 +356,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
       Track_last = 0.0f;
       Last_Out = 0.0f;
     }
-    else if ((Tracks[0] < 2000U) && (Tracks[1] < 2000U) && (Tracks[2] < 2000U) && (Tracks[3] < 2000U))
+    else if ((Track_Binary[0] == 0U) && (Track_Binary[1] == 0U) && (Track_Binary[2] == 0U) && (Track_Binary[3] == 0U))
     {
       Out = Last_Out;
     }
@@ -356,7 +369,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
       }
       else
       {
-        Track_current = (float)((-3 * Tracks[0]) + (-1 * Tracks[1]) + (1 * Tracks[2]) + (3 * Tracks[3]));
+        Track_current = (float)((-3 * Track_Binary[0]) + (-1 * Track_Binary[1]) + (1 * Track_Binary[2]) + (3 * Track_Binary[3]));
         Track_current /= (float)track_sum;
         Track_error = Track_current - Track_last;
         Track_last = Track_current;
