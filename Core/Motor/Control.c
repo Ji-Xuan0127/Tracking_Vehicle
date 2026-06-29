@@ -1,4 +1,5 @@
 #include "main.h"
+#include "stm32f4xx_hal_gpio.h"
 #include "tim.h"
 
 void Move_Forward(int16_t speed)
@@ -51,17 +52,9 @@ void Stop_Motor(void)
 
 void Start_Motor(void)
 {
-  uint8_t Start_Flag = 0;
- if(HAL_GPIO_ReadPin(Start_in_GPIO_Port, Start_in_Pin) == GPIO_PIN_SET)
- {
-   Start_Flag = !Start_Flag;
- }
- if(Start_Flag)
- {
-   HAL_GPIO_WritePin(Start_out_GPIO_Port, Start_out_Pin, GPIO_PIN_SET);
- }
- else
- {
-   HAL_GPIO_WritePin(Start_out_GPIO_Port, Start_out_Pin, GPIO_PIN_RESET);
- }
+  HAL_GPIO_WritePin(Motor1_Con1_GPIO_Port, Motor1_Con1_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(Motor1_Con2_GPIO_Port, Motor1_Con2_Pin, GPIO_PIN_RESET);
+
+  HAL_GPIO_WritePin(Motor2_Con1_GPIO_Port, Motor2_Con1_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(Motor2_Con2_GPIO_Port, Motor2_Con2_Pin, GPIO_PIN_RESET);
 }

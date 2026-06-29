@@ -20,7 +20,6 @@
 #include "main.h"
 #include "adc.h"
 #include "dma.h"
-#include "font.h"
 #include "i2c.h"
 #include "spi.h"
 #include "tim.h"
@@ -152,6 +151,7 @@ int main(void)
   MX_TIM10_Init();
   MX_TIM11_Init();
   MX_USART1_UART_Init();
+  MX_TIM9_Init();
   /* USER CODE BEGIN 2 */
   HAL_Delay(20);
   OLED_Init();
@@ -169,6 +169,8 @@ int main(void)
 
   HAL_TIM_PWM_Start_IT(&htim10, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start_IT(&htim11, TIM_CHANNEL_1);
+
+  Start_Motor();
 
   ST7735_DrawImage(0, 0, 128, 128, (uint16_t*)back_img_128x128);
   /* USER CODE END 2 */
@@ -205,19 +207,25 @@ int main(void)
     else
     {
       HAL_GPIO_WritePin(Start_out_GPIO_Port, Start_out_Pin, GPIO_PIN_RESET);
-      Stop_Motor();
     }
 
     OLED_NewFrame();
 
-    OLED_PrintString(0, 0, start, &font16x16, OLED_COLOR_NORMAL);
-    OLED_PrintString(0, 16, speed, &font16x16, OLED_COLOR_NORMAL);
-    OLED_PrintString(64, 16, output, &font16x16, OLED_COLOR_NORMAL);
-    OLED_PrintString(0, 32, kp, &font16x16, OLED_COLOR_NORMAL);
-    OLED_PrintString(64, 32, ki, &font16x16, OLED_COLOR_NORMAL);
-    OLED_PrintString(0, 48, kd, &font16x16, OLED_COLOR_NORMAL);
+    OLED_PrintASCIIString(0, 0, start, &afont8x6, OLED_COLOR_NORMAL);
+    OLED_PrintASCIIString(0, 16, speed, &afont8x6, OLED_COLOR_NORMAL);
+    OLED_PrintASCIIString(0, 24, output, &afont8x6, OLED_COLOR_NORMAL);
+    OLED_PrintASCIIString(0, 32, kp, &afont8x6, OLED_COLOR_NORMAL);
+    OLED_PrintASCIIString(0, 40, ki, &afont8x6, OLED_COLOR_NORMAL);
+    OLED_PrintASCIIString(0, 48, kd, &afont8x6, OLED_COLOR_NORMAL);
 
     OLED_ShowFrame();
+
+    char uart_buf[128];
+    HAL_Delay(1000);
+    sprintf(uart_buf, "ADC:%u,%u,%u,%u\r\nSpeed:%d Kp:%.2f Ki:%.2f Kd:%.2f\r\n",
+         values[0], values[1], values[2], values[3],
+         Speed_Target, Kp, Ki, Kd);
+    HAL_UART_Transmit(&huart1, (uint8_t *)uart_buf, strlen(uart_buf), HAL_MAX_DELAY);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
