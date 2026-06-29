@@ -31,6 +31,7 @@
 #include "oled.h"
 #include "st7735.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "img.h"
 #include "Control.h"
@@ -74,10 +75,9 @@ int16_t Speed_Target = 0;
 uint8_t KeyNum = 0;
 volatile uint8_t Start_Flag = 0;
 
-float Track_current = 0.0f;
-float Track_last = 0.0f;
-float Track_error = 0.0f;
-float Track_error_last = 0.0f;
+float Track_position = 0.0f;
+float Track_position_last = 0.0f;
+float Track_derivative = 0.0f;
 float Track_integral = 0.0f;
 
 float Kp = 0.0f;
@@ -172,7 +172,7 @@ int main(void)
 
   Start_Motor();
 
-  ST7735_DrawImage(0, 0, 128, 128, (uint16_t*)back_img_128x128);
+  ST7735_DrawImage(0, 0, 128, 128, (uint16_t*)test_img_128x128);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -191,9 +191,9 @@ int main(void)
     if (Start_Flag && !last_start_flag)
     {
       Track_integral = 0.0f;
-      Track_error = 0.0f;
-      Track_error_last = 0.0f;
-      Track_last = 0.0f;
+      Track_position = 0.0f;
+      Track_position_last = 0.0f;
+      Track_derivative = 0.0f;
     }
 
     last_start_flag = Start_Flag;
@@ -220,12 +220,12 @@ int main(void)
 
     OLED_ShowFrame();
 
-    char uart_buf[128];
-    HAL_Delay(1000);
-    sprintf(uart_buf, "ADC:%u,%u,%u,%u\r\nSpeed:%d Kp:%.2f Ki:%.2f Kd:%.2f\r\n",
-         values[0], values[1], values[2], values[3],
-         Speed_Target, Kp, Ki, Kd);
-    HAL_UART_Transmit(&huart1, (uint8_t *)uart_buf, strlen(uart_buf), HAL_MAX_DELAY);
+    // char uart_buf[128];
+    // HAL_Delay(1000);
+    // sprintf(uart_buf, "ADC:%u,%u,%u,%u\r\nSpeed:%d Kp:%.2f Ki:%.2f Kd:%.2f\r\n",
+    //      values[0], values[1], values[2], values[3],
+    //      Speed_Target, Kp, Ki, Kd);
+    // HAL_UART_Transmit(&huart1, (uint8_t *)uart_buf, strlen(uart_buf), HAL_MAX_DELAY);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -341,15 +341,38 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   }
   else if (htim->Instance == TIM7)
   {
+    /* Always update filter init and ADC readings for real-time display */
+    if (!pot_filter_ready)
+    {
+      pot_filter_ready = 1;
+    }
+
+    uint16_t kp_adc = ADC_Filter(values[1], &values_filtered[1]);
+    uint16_t ki_adc = ADC_Filter(values[2], &values_filtered[2]);
+    uint16_t kd_adc = ADC_Filter(values[3], &values_filtered[3]);
+
+    Kp = Map_ADC_To_Float(kp_adc, 0.0f, 800.0f);
+    Ki = Map_ADC_To_Float(ki_adc, 0.0f, 100.0f);
+    Kd = Map_ADC_To_Float(kd_adc, 0.0f, 400.0f);
+
+    /* Always update display strings (fixed-point, avoids picolibc float %%f) */
+    {
+      int32_t kp_c = (int32_t)(Kp * 100.0f + 0.5f);
+      int32_t ki_c = (int32_t)(Ki * 100.0f + 0.5f);
+      int32_t kd_c = (int32_t)(Kd * 100.0f + 0.5f);
+      int32_t out_c = (int32_t)(Out * 100.0f + (Out >= 0.0f ? 0.5f : -0.5f));
+      sprintf(kp, "Kp: %d.%02d", kp_c / 100, abs(kp_c % 100));
+      sprintf(ki, "Ki: %d.%02d", ki_c / 100, abs(ki_c % 100));
+      sprintf(kd, "Kd: %d.%02d", kd_c / 100, abs(kd_c % 100));
+      sprintf(output, "Out: %d.%02d", out_c / 100, abs(out_c % 100));
+    }
+    sprintf(speed, "Speed: %d", Speed_Target);
+
+    /* Motor control only when started */
     if (!Start_Flag)
     {
       Stop_Motor();
       return;
-    }
-
-    if (!pot_filter_ready)
-    {
-      pot_filter_ready = 1;
     }
 
     Track_Binary_Process();
@@ -358,10 +381,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     if ((Track_Binary[0] == 1U) && (Track_Binary[1] == 1U) && (Track_Binary[2] == 1U) && (Track_Binary[3] == 1U))
     {
       Out = 0.0f;
-      Track_error = 0.0f;
-      Track_error_last = 0.0f;
+      Track_position = 0.0f;
+      Track_position_last = 0.0f;
+      Track_derivative = 0.0f;
       Track_integral = 0.0f;
-      Track_last = 0.0f;
       Last_Out = 0.0f;
     }
     else if ((Track_Binary[0] == 0U) && (Track_Binary[1] == 0U) && (Track_Binary[2] == 0U) && (Track_Binary[3] == 0U))
@@ -370,39 +393,27 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     }
     else
     {
+      /* Compute weighted sensor position (-3 to +3, 0 = centered) */
       if (track_sum == 0U)
       {
-        Track_current = Track_last;
-        Track_error = 0.0f;
+        Track_position = Track_position_last;
       }
       else
       {
-        Track_current = (float)((-3 * Track_Binary[0]) + (-1 * Track_Binary[1]) + (1 * Track_Binary[2]) + (3 * Track_Binary[3]));
-        Track_current /= (float)track_sum;
-        Track_error = Track_current - Track_last;
-        Track_last = Track_current;
+        Track_position = (float)((-3 * Track_Binary[0]) + (-1 * Track_Binary[1])
+                               + ( 1 * Track_Binary[2]) + ( 3 * Track_Binary[3]));
+        Track_position /= (float)track_sum;
       }
 
-      uint16_t kp_adc = ADC_Filter(values[1], &values_filtered[1]);
-      uint16_t ki_adc = ADC_Filter(values[2], &values_filtered[2]);
-      uint16_t kd_adc = ADC_Filter(values[3], &values_filtered[3]);
+      /* PID: P=position, I=∫position, D=d(position)/dt */
+      Track_derivative = Track_position - Track_position_last;
+      Track_position_last = Track_position;
 
-      Kp = Map_ADC_To_Float(kp_adc, 0.0f, 200.0f);
-      Ki = Map_ADC_To_Float(ki_adc, 0.0f, 20.0f);
-      Kd = Map_ADC_To_Float(kd_adc, 0.0f, 100.0f);
+      Track_integral += Track_position;
+      if (Track_integral > 100.0f)  Track_integral = 100.0f;
+      if (Track_integral < -100.0f) Track_integral = -100.0f;
 
-      Track_integral += Track_error;
-      if (Track_integral > 100.0f)
-      {
-        Track_integral = 100.0f;
-      }
-      else if (Track_integral < -100.0f)
-      {
-        Track_integral = -100.0f;
-      }
-
-      Out = (Kp * Track_error) + (Ki * Track_integral) + (Kd * (Track_error - Track_error_last));
-      Track_error_last = Track_error;
+      Out = (Kp * Track_position) + (Ki * Track_integral) + (Kd * Track_derivative);
       Last_Out = Out;
     }
 
@@ -410,12 +421,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
       Clamp_PWM((int32_t)((float)Speed_Target - Out)),
       Clamp_PWM((int32_t)((float)Speed_Target + Out))
     );
-
-    sprintf(kp, "Kp: %.2f", Kp);
-    sprintf(ki, "Ki: %.2f", Ki);
-    sprintf(kd, "Kd: %.2f", Kd);
-    sprintf(speed, "Speed: %d", Speed_Target);
-    sprintf(output, "Out: %.2f", Out);
   }
   else if (htim->Instance == TIM9)
   {
